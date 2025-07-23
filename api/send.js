@@ -1,8 +1,5 @@
-// /api/send.js
-import nodemailer from "nodemailer";
-
 export default async function handler(req, res) {
-  // ✅ Allow CORS only from your Kintone domain
+  // ✅ CORS headers
   res.setHeader(
     "Access-Control-Allow-Origin",
     "https://allstatebm.kintone.com"
@@ -10,30 +7,28 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // ✅ Handle preflight request
+  // ✅ Handle preflight OPTIONS request
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
+  // ✅ Handle POST request
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
 
   const { subject, body, pdf } = req.body;
 
-  console.log("[Server] Incoming request:", { subject });
-
   if (!subject || !body || !pdf) {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
   try {
-    // Create transport using Gmail + App Password
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
         user: "allstatebm@gmail.com",
-        pass: "pjnffmqzrgvhcmks", // Replace with actual 16-char App Password
+        pass: "bbgspzbzubwwrnog",
       },
     });
 
@@ -53,7 +48,6 @@ export default async function handler(req, res) {
 
     const info = await transporter.sendMail(mailOptions);
     console.log("[Server] Email sent:", info.messageId);
-
     return res.status(200).json({ message: "Email sent" });
   } catch (error) {
     console.error("[Server] Email error:", error);
