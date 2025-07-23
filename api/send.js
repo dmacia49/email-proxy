@@ -33,7 +33,7 @@ export default async function handler(req, res) {
       service: "gmail",
       auth: {
         user: "allstatebm@gmail.com",
-        pass: "832925Om!", // Replace with actual 16-char App Password
+        pass: "pjnffmqzrgvhcmks", // Replace with actual 16-char App Password
       },
     });
 
