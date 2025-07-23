@@ -1,35 +1,49 @@
+// /api/send.js
+import nodemailer from "nodemailer";
+
 export default async function handler(req, res) {
-  // ✅ Handle CORS preflight
-  if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    return res.status(200).end();
-  }
-
-  // ✅ Main CORS header
-  res.setHeader("Access-Control-Allow-Origin", "*");
-
   if (req.method !== "POST") {
-    return res.status(405).json({ message: "Only POST allowed" });
+    return res.status(405).json({ error: "Method Not Allowed" });
   }
 
-  const { email, subject, body, pdf } = req.body;
+  const { subject, body, pdf } = req.body;
+
+  console.log("[Server] Incoming request:", { subject });
+
+  if (!subject || !body || !pdf) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
 
   try {
-    const gmailResponse = await fetch(
-      "https://script.google.com/macros/s/AKfycby6t_h8z_ywaFWL129sSUDkbO3CFyx2lZdBNiEtUqCmnnznKuHxYqpo73I8G50WgPOIpg/exec",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, subject, body, pdf }),
-      }
-    );
+    // Create transport using Gmail + App Password
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: "allstatebm@gmail.com",
+        pass: "832925Om!", // Replace with actual 16-char App Password
+      },
+    });
 
-    const result = await gmailResponse.text();
-    res.status(200).json({ message: result });
+    const mailOptions = {
+      from: `Allstate Billing <allstatebm@gmail.com>`,
+      to: "danielmacias1991@gmail.com",
+      subject: subject,
+      text: body,
+      attachments: [
+        {
+          filename: "invoice.pdf",
+          content: Buffer.from(pdf, "base64"),
+          contentType: "application/pdf",
+        },
+      ],
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log("[Server] Email sent:", info.messageId);
+
+    return res.status(200).json({ message: "Email sent" });
   } catch (error) {
-    console.error("Send failed:", error);
-    res.status(500).json({ message: "Failed to send email" });
+    console.error("[Server] Email error:", error);
+    return res.status(500).json({ error: "Failed to send email" });
   }
 }
