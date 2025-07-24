@@ -1,5 +1,8 @@
 {
   "name": "kintone-email-proxy",
   "version": "1.0.0",
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "nodemailer": "^7.0.5"
+  }
 }
