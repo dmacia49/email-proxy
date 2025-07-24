@@ -1,7 +1,9 @@
+// /api/send.js
+
 import nodemailer from "nodemailer";
 
 export default async function handler(req, res) {
-  // ✅ CORS headers
+  // ✅ Handle CORS
   res.setHeader(
     "Access-Control-Allow-Origin",
     "https://allstatebm.kintone.com"
@@ -9,35 +11,36 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // ✅ Handle preflight OPTIONS request
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
-  // ✅ Handle POST request
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
 
   const { subject, body, pdf } = req.body;
 
+  console.log("[Server] Incoming request:", { subject });
+
   if (!subject || !body || !pdf) {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
   try {
+    // ✅ Gmail + App Password auth
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
         user: "allstatebm@gmail.com",
-        pass: "bbgspzbzubwwrnog",
+        pass: "bgspzbzubwwrnog", // Replace this with actual App Password
       },
     });
 
     const mailOptions = {
-      from: `Allstate Billing <allstatebm@gmail.com>`,
+      from: "Allstate Billing <allstatebm@gmail.com>",
       to: "danielmacias1991@gmail.com",
-      subject: subject,
+      subject,
       text: body,
       attachments: [
         {
