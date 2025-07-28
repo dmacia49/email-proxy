@@ -39,7 +39,7 @@ export default async function handler(req, res) {
 
     const mailOptions = {
       from: "Allstate Billing <allstatebm@gmail.com>",
-      to: "danielmacias1991@gmail.com",
+      to: "dmacia49@calstatela.edu",
       subject,
       text: body,
       attachments: [
