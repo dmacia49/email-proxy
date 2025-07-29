@@ -19,18 +19,16 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
 
-  // ✅ Include `to` (recipient) in the request body
+  // ✅ Include `to` (recipient)
   const { subject, body, pdf, to } = req.body;
 
   console.log("[Server] Incoming request:", { subject, to });
 
-  // ✅ Validate all required fields including `to`
   if (!subject || !body || !pdf || !to) {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
   try {
-    // ✅ Gmail + App Password auth
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
@@ -39,10 +37,9 @@ export default async function handler(req, res) {
       },
     });
 
-    // ✅ Dynamic recipient
     const mailOptions = {
       from: "Allstate Billing <allstatebm@gmail.com>",
-      to, // recipient from the request body
+      to, // dynamic recipient
       subject,
       text: body,
       attachments: [
