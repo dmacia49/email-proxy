@@ -16,7 +16,7 @@ const SENDER_POOL = [
   {
     label: "BACKUP_A",
     user: "allstatebm2@gmail.com",
-    pass: process.env.GMAIL2_PASS, // set in Vercel env
+    pass: process.env.GMAIL2_PASS || "akyswfsarantchxt", // set in Vercel env
   },
 ];
 
@@ -89,14 +89,12 @@ export default async function handler(req, res) {
           "Message ID:",
           info.messageId
         );
-        return res
-          .status(200)
-          .json({
-            message: "Email sent",
-            recipient: to,
-            sender: acc.user,
-            id: info.messageId,
-          });
+        return res.status(200).json({
+          message: "Email sent",
+          recipient: to,
+          sender: acc.user,
+          id: info.messageId,
+        });
       } catch (error) {
         lastErr = error;
         console.error(
