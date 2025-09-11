@@ -27,6 +27,11 @@ export default async function handler(req, res) {
   const SENDER_POOL = [
     {
       label: "PRIMARY",
+      user: "allstatebm3@gmail.com",
+      pass: process.env.GMAIL3_PASS || "iexvbzmwueoxdllr",
+    },
+    {
+      label: "BACKUP_B",
       user: "allstatebm@gmail.com",
       pass: process.env.GMAIL1_PASS || "bayuwsrqoiofgrbr",
     },
@@ -34,11 +39,6 @@ export default async function handler(req, res) {
       label: "BACKUP_A",
       user: "allstatebm2@gmail.com",
       pass: process.env.GMAIL2_PASS || "akyswfsarantchxt",
-    },
-    {
-      label: "BACKUP_B",
-      user: "allstatebm3@gmail.com",
-      pass: process.env.GMAIL3_PASS || "iexvbzmwueoxdllr",
     },
   ];
 
