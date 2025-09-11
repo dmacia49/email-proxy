@@ -10,13 +10,18 @@ export const config = {
 const SENDER_POOL = [
   {
     label: "PRIMARY",
-    user: "allstatebm@gmail.com",
-    pass: process.env.GMAIL1_PASS || "bayuwsrqoiofgrbr", // App Password (env preferred)
+    user: "allstatebm3@gmail.com",
+    pass: process.env.GMAIL1_PASS || "iexvbzmwueoxdllr", // App Password (env preferred)
   },
   {
     label: "BACKUP_A",
     user: "allstatebm2@gmail.com",
     pass: process.env.GMAIL2_PASS || "akyswfsarantchxt", // set in Vercel env
+  },
+  {
+    label: "BACKUP_B",
+    user: "allstatebm@gmail.com",
+    pass: process.env.GMAIL1_PASS || "bayuwsrqoiofgrbr", // App Password (env preferred)
   },
 ];
 
