@@ -41,7 +41,7 @@ export default async function handler(req, res) {
 
     // ✅ Dynamic recipient
     const mailOptions = {
-      from: "Allstate Billing <allstatebm@gmail.com>",
+      from: "Allstate Billing <allstatebm3@gmail.com>",
       to, // recipient from the request body
       subject,
       text: body,
