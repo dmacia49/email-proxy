@@ -59,6 +59,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    // base options common to all senders (NO replyTo here)
     const mailBase = {
       to,
       subject,
@@ -70,7 +71,6 @@ export default async function handler(req, res) {
           contentType: "application/pdf",
         },
       ],
-      replyTo: "allstatebm@gmail.com", // keep replies unified
     };
 
     let lastErr = null;
@@ -82,6 +82,8 @@ export default async function handler(req, res) {
       const mailOptions = {
         ...mailBase,
         from: `Allstate Billing <${acc.user}>`,
+        // 👇 Reply-To now matches the actual sender account used
+        replyTo: `Allstate Billing <${acc.user}>`,
       };
 
       try {
