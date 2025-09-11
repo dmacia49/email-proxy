@@ -23,7 +23,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
-  // ✅ Sender pool (rotates if daily limit hit or failure)
+  // ✅ Sender pool
   const SENDER_POOL = [
     {
       label: "PRIMARY",
@@ -57,7 +57,6 @@ export default async function handler(req, res) {
       // ✅ Per-account mail options
       const mailOptions = {
         from: `Allstate Billing <${acc.user}>`,
-        replyTo: acc.user, // reply goes to same sender account
         to,
         subject,
         text: body,
@@ -88,9 +87,11 @@ export default async function handler(req, res) {
         `[Server] Send failed via ${acc.label}:`,
         err?.message || err
       );
-      // If daily limit or quota, try next account
+
+      // If daily limit exceeded, try next account
       if (/Daily user sending limit exceeded/i.test(err?.message || ""))
         continue;
+
       break; // other errors → stop
     }
   }
