@@ -27,14 +27,15 @@ export default async function handler(req, res) {
   const SENDER_POOL = [
     {
       label: "PRIMARY",
-      user: "allstatebm2@gmail.com",
-      pass: process.env.GMAIL2_PASS || "akyswfsarantchxt",
-    },
-    {
-      label: "BACKUP_A",
       user: "allstatebm@gmail.com",
       pass: process.env.GMAIL1_PASS || "bayuwsrqoiofgrbr",
     },
+    {
+      label: "BACKUP_A",
+      user: "allstatebm2@gmail.com",
+      pass: process.env.GMAIL2_PASS || "akyswfsarantchxt",
+    },
+
     {
       label: "BACKUP_B",
       user: "allstatebm3@gmail.com",
