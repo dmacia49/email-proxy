@@ -11,7 +11,7 @@ const SENDER_POOL = [
   {
     label: "PRIMARY",
     user: "allstatebm3@gmail.com",
-    pass: process.env.GMAIL1_PASS || "iexvbzmwueoxdllr", // App Password (env preferred)
+    pass: process.env.GMAIL3_PASS || "iexvbzmwueoxdllr", // App Password (env preferred)
   },
   {
     label: "BACKUP_A",
