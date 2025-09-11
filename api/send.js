@@ -6,7 +6,7 @@ export default async function handler(req, res) {
   // ✅ Handle CORS
   res.setHeader(
     "Access-Control-Allow-Origin",
-    "https://allstatebm3.kintone.com"
+    "https://allstatebm.kintone.com"
   );
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -34,14 +34,14 @@ export default async function handler(req, res) {
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
-        user: "allstatebm3@gmail.com",
-        pass: "iexvbzmwueoxdllr",
+        user: "allstatebm@gmail.com",
+        pass: "bayuwsrqoiofgrbr",
       },
     });
 
     // ✅ Dynamic recipient
     const mailOptions = {
-      from: "Allstate Billing <allstatebm3@gmail.com>",
+      from: "Allstate Billing <allstatebm@gmail.com>",
       to, // recipient from the request body
       subject,
       text: body,
