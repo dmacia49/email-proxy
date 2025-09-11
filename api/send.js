@@ -1,5 +1,4 @@
 // /api/send.js
-
 import nodemailer from "nodemailer";
 
 export default async function handler(req, res) {
@@ -11,55 +10,94 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
-  if (req.method !== "POST") {
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST")
     return res.status(405).json({ error: "Method Not Allowed" });
-  }
 
-  // ✅ Include `to` (recipient) in the request body
-  const { subject, body, pdf, to } = req.body;
-
+  // ✅ Parse body
+  const { subject, body, pdf, to } = req.body || {};
   console.log("[Server] Incoming request:", { subject, to });
 
-  // ✅ Validate all required fields including `to`
+  // ✅ Validate
   if (!subject || !body || !pdf || !to) {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
-  try {
-    // ✅ Gmail + App Password auth
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: "allstatebm@gmail.com",
-        pass: "bayuwsrqoiofgrbr",
-      },
-    });
+  // ✅ Sender pool
+  const SENDER_POOL = [
+    {
+      label: "PRIMARY",
+      user: "allstatebm@gmail.com",
+      pass: process.env.GMAIL1_PASS || "bayuwsrqoiofgrbr",
+    },
+    {
+      label: "BACKUP_A",
+      user: "allstatebm2@gmail.com",
+      pass: process.env.GMAIL2_PASS || "akyswfsarantchxt",
+    },
+    {
+      label: "BACKUP_B",
+      user: "allstatebm3@gmail.com",
+      pass: process.env.GMAIL3_PASS || "iexvbzmwueoxdllr",
+    },
+  ];
 
-    // ✅ Dynamic recipient
-    const mailOptions = {
-      from: "Allstate Billing <allstatebm@gmail.com>",
-      to, // recipient from the request body
-      subject,
-      text: body,
-      attachments: [
-        {
-          filename: "invoice.pdf",
-          content: Buffer.from(pdf, "base64"),
-          contentType: "application/pdf",
-        },
-      ],
-    };
+  let lastError = null;
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log("[Server] Email sent to:", to, "Message ID:", info.messageId);
+  for (const acc of SENDER_POOL) {
+    if (!acc?.user || !acc?.pass) continue;
 
-    return res.status(200).json({ message: "Email sent", recipient: to });
-  } catch (error) {
-    console.error("[Server] Email error:", error);
-    return res.status(500).json({ error: "Failed to send email" });
+    try {
+      // ✅ Create transporter for this account
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: { user: acc.user, pass: acc.pass },
+      });
+
+      // ✅ Per-account mail options
+      const mailOptions = {
+        from: `Allstate Billing <${acc.user}>`,
+        to,
+        subject,
+        text: body,
+        attachments: [
+          {
+            filename: "invoice.pdf",
+            content: Buffer.from(pdf, "base64"),
+            contentType: "application/pdf",
+          },
+        ],
+      };
+
+      // ✅ Attempt send
+      const info = await transporter.sendMail(mailOptions);
+      console.log(
+        `[Server] Email sent via ${acc.label}: ${acc.user} -> ${to}, Message ID: ${info.messageId}`
+      );
+
+      return res.status(200).json({
+        message: "Email sent",
+        recipient: to,
+        sender: acc.user,
+        id: info.messageId,
+      });
+    } catch (err) {
+      lastError = err;
+      console.error(
+        `[Server] Send failed via ${acc.label}:`,
+        err?.message || err
+      );
+
+      // If daily limit exceeded, try next account
+      if (/Daily user sending limit exceeded/i.test(err?.message || ""))
+        continue;
+
+      break; // other errors → stop
+    }
   }
+
+  return res.status(500).json({
+    error: "Failed to send email",
+    detail: lastError?.message || "Unknown error",
+  });
 }
