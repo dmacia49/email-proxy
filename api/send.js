@@ -39,7 +39,7 @@ function getTransporter(user, pass) {
       nodemailer.createTransport({
         service: "gmail",
         pool: true,
-        // Gentle, safe defaults; override via env if desired
+        // Safe defaults; adjust via env if needed
         maxConnections: Number(process.env.SMTP_MAX_CONN || 1),
         maxMessages: Number(process.env.SMTP_MAX_MSG || 100),
         rateDelta: Number(process.env.SMTP_RATE_DELTA || 1200), // ms window
@@ -73,7 +73,6 @@ function classify(err) {
     return { retryable: true, reason: "Network timeout" };
   return { retryable: false, reason: msg || "Unknown error" };
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ===== Simple round-robin across accounts (per instance) =====
 let rrIndex = 0;
@@ -81,11 +80,7 @@ function accountsInOrder() {
   const n = SENDER_POOL.length;
   if (n === 0) return [];
   const start = rrIndex++ % n;
-  const ordered = Array.from(
-    { length: n },
-    (_, i) => SENDER_POOL[(start + i) % n]
-  );
-  return ordered;
+  return Array.from({ length: n }, (_, i) => SENDER_POOL[(start + i) % n]);
 }
 
 export default async function handler(req, res) {
@@ -179,8 +174,10 @@ export default async function handler(req, res) {
 
   let lastError = null;
 
-  // Try accounts in round-robin order; retry once on transient failure for the chosen account,
-  // switch to next account on daily-limit or persistent/transient failures.
+  // Fast-path: one attempt per account, no retry on the same account.
+  // - If "daily limit exceeded" -> immediately try next account.
+  // - If "recipient rejected" (non-recoverable) -> return 502 immediately.
+  // - For other errors (temporary/network/unknown) -> try next account without delay.
   for (const acc of accountsInOrder()) {
     try {
       const transporter = getTransporter(acc.user, acc.pass);
@@ -189,7 +186,6 @@ export default async function handler(req, res) {
         from: `Allstate Billing <${acc.user}>`,
       };
 
-      // First attempt
       try {
         const info = await transporter.sendMail(mailOptions);
         console.log(
@@ -214,7 +210,7 @@ export default async function handler(req, res) {
         console.error(
           JSON.stringify({
             level: "error",
-            event: "send_fail_first",
+            event: "send_fail",
             reqId,
             account: acc.label,
             sender: acc.user,
@@ -225,60 +221,22 @@ export default async function handler(req, res) {
         );
         lastError = err1;
 
-        // If daily limit exceeded, immediately try next account
+        // Non-recoverable for this message: stop immediately
+        if (c1.reason === "Recipient rejected") {
+          return res
+            .status(502)
+            .json({ error: "Send failed", detail: c1.reason, reqId });
+        }
+
+        // Daily cap on this account -> try next account
         if (/Daily user sending limit exceeded/i.test(err1?.message || "")) {
           continue;
         }
 
-        // Retry once on retryable errors (same account)
-        if (c1.retryable) {
-          await sleep(800);
-          try {
-            const info2 = await transporter.sendMail(mailOptions);
-            console.log(
-              JSON.stringify({
-                level: "info",
-                event: "sent_after_retry",
-                reqId,
-                sender: acc.user,
-                to,
-                messageId: info2.messageId,
-              })
-            );
-            return res.status(200).json({
-              message: "Email sent",
-              recipient: to,
-              sender: acc.user,
-              id: info2.messageId,
-              reqId,
-            });
-          } catch (err2) {
-            const c2 = classify(err2);
-            console.error(
-              JSON.stringify({
-                level: "error",
-                event: "send_fail_retry",
-                reqId,
-                account: acc.label,
-                sender: acc.user,
-                to,
-                reason: c2.reason,
-                code: err2?.responseCode,
-              })
-            );
-            lastError = err2;
-            // Move to next account
-            continue;
-          }
-        }
-
-        // Non-retryable error (not daily-limit) -> return 502 now
-        return res
-          .status(502)
-          .json({ error: "Send failed", detail: c1.reason, reqId });
+        // Temporary/network/unknown -> fastest path: try next account (no retry on same account)
+        continue;
       }
     } catch (outer) {
-      // Transporter creation or unexpected error
       lastError = outer;
       console.error(
         JSON.stringify({
