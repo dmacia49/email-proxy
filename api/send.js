@@ -1,104 +1,282 @@
 // /api/send.js
 import nodemailer from "nodemailer";
+import crypto from "crypto";
+
+// ===== CORS / Origins =====
+const ORIGINS = new Set(
+  [
+    "https://allstatebm.kintone.com",
+    process.env.DEV_ORIGIN, // optional dev origin
+  ].filter(Boolean)
+);
+
+// ===== Sender pool (ENV ONLY — no plaintext fallbacks) =====
+// Configure in env: GMAIL1_USER/GMAIL1_PASS, GMAIL2_USER/GMAIL2_PASS, ...
+const SENDER_POOL = [
+  {
+    label: "PRIMARY",
+    user: process.env.GMAIL1_USER,
+    pass: process.env.GMAIL1_PASS,
+  },
+  {
+    label: "BACKUP_A",
+    user: process.env.GMAIL2_USER,
+    pass: process.env.GMAIL2_PASS,
+  },
+  {
+    label: "BACKUP_B",
+    user: process.env.GMAIL3_USER,
+    pass: process.env.GMAIL3_PASS,
+  },
+].filter((a) => a.user && a.pass);
+
+// ===== Nodemailer pooled transporters (warm reuse on serverless) =====
+const transporterCache = new Map();
+function getTransporter(user, pass) {
+  const key = String(user);
+  if (!transporterCache.has(key)) {
+    transporterCache.set(
+      key,
+      nodemailer.createTransport({
+        service: "gmail",
+        pool: true,
+        maxConnections: Number(process.env.SMTP_MAX_CONN || 2),
+        maxMessages: Number(process.env.SMTP_MAX_MSG || 100),
+        rateDelta: Number(process.env.SMTP_RATE_DELTA || 1000), // ms window
+        rateLimit: Number(process.env.SMTP_RATE_LIMIT || 5), // msgs per window
+        socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT || 30_000),
+        auth: { user, pass },
+      })
+    );
+  }
+  return transporterCache.get(key);
+}
+
+// ===== Helpers =====
+function isValidEmail(s) {
+  return typeof s === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
+}
+function b64ApproxBytes(b64) {
+  // rough: 3/4 of chars (ignores padding)
+  return Math.floor((b64 || "").length * 0.75);
+}
+function classify(err) {
+  const code = err?.responseCode;
+  const msg = err?.message || "";
+  if (code === 421 || code === 451 || code === 452)
+    return { retryable: true, reason: "Temporary failure" };
+  if (code === 550 || code === 553 || code === 554)
+    return { retryable: false, reason: "Recipient rejected" };
+  if (/Daily user sending limit exceeded/i.test(msg))
+    return { retryable: false, reason: "Daily limit" };
+  if (/ETIMEDOUT|ECONNRESET|Timeout/i.test(msg))
+    return { retryable: true, reason: "Network timeout" };
+  return { retryable: false, reason: msg || "Unknown error" };
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export default async function handler(req, res) {
-  // ✅ Handle CORS
-  res.setHeader(
-    "Access-Control-Allow-Origin",
-    "https://allstatebm.kintone.com"
-  );
+  const origin = req.headers.origin;
+  if (!ORIGINS.has(origin))
+    return res.status(403).json({ error: "Forbidden origin" });
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-ABM-Key");
 
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST")
     return res.status(405).json({ error: "Method Not Allowed" });
-
-  // ✅ Parse body
-  const { subject, body, pdf, to } = req.body || {};
-  console.log("[Server] Incoming request:", { subject, to });
-
-  // ✅ Validate
-  if (!subject || !body || !pdf || !to) {
-    return res.status(400).json({ error: "Missing required fields" });
+  if (!/application\/json/i.test(req.headers["content-type"] || "")) {
+    return res.status(415).json({ error: "Unsupported Media Type" });
   }
 
-  // ✅ Sender pool
-  const SENDER_POOL = [
-    {
-      label: "PRIMARY",
-      user: "allstatebm@gmail.com",
-      pass: process.env.GMAIL1_PASS || "bayuwsrqoiofgrbr",
-    },
-    {
-      label: "BACKUP_A",
-      user: "allstatebm2@gmail.com",
-      pass: process.env.GMAIL2_PASS || "akyswfsarantchxt",
-    },
+  // Optional API key
+  if (process.env.ABM_API_KEY) {
+    if (req.headers["x-abm-key"] !== process.env.ABM_API_KEY) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+  }
 
-    {
-      label: "BACKUP_B",
-      user: "allstatebm3@gmail.com",
-      pass: process.env.GMAIL3_PASS || "iexvbzmwueoxdllr",
+  const reqId = crypto.randomUUID();
+
+  // Parse body
+  const { subject, body, pdf, to, filename, attachmentUrl } = req.body || {};
+  console.log(
+    JSON.stringify({
+      level: "info",
+      event: "incoming",
+      reqId,
+      to,
+      subject: (subject || "").slice(0, 120),
+      hasPdf: Boolean(pdf),
+      hasUrl: Boolean(attachmentUrl),
+    })
+  );
+
+  // Validate
+  if (!subject || !body || !to || (!pdf && !attachmentUrl)) {
+    return res
+      .status(400)
+      .json({
+        error:
+          "Missing required fields (subject, body, to, and pdf OR attachmentUrl)",
+      });
+  }
+  if (!isValidEmail(to)) {
+    return res.status(400).json({ error: "Invalid recipient email" });
+  }
+  if (
+    pdf &&
+    b64ApproxBytes(pdf) >
+      Number(process.env.MAX_ATTACHMENT_BYTES || 10 * 1024 * 1024)
+  ) {
+    return res.status(413).json({ error: "Attachment too large" });
+  }
+  if (!SENDER_POOL.length) {
+    return res.status(500).json({ error: "No sender accounts configured" });
+  }
+
+  const mailBase = {
+    to,
+    subject,
+    text: body,
+    from: undefined, // set per account
+    replyTo: "no-reply@allstatebm.com",
+    headers: {
+      "List-Unsubscribe":
+        "<mailto:no-reply@allstatebm.com?subject=unsubscribe>",
     },
-  ];
+    attachments: [
+      {
+        filename: filename || "invoice.pdf",
+        ...(attachmentUrl
+          ? { path: attachmentUrl }
+          : { content: Buffer.from(pdf, "base64") }),
+        contentType: "application/pdf",
+        contentDisposition: "attachment",
+      },
+    ],
+  };
 
   let lastError = null;
 
   for (const acc of SENDER_POOL) {
-    if (!acc?.user || !acc?.pass) continue;
-
     try {
-      // ✅ Create transporter for this account
-      const transporter = nodemailer.createTransport({
-        service: "gmail",
-        auth: { user: acc.user, pass: acc.pass },
-      });
-
-      // ✅ Per-account mail options
+      const transporter = getTransporter(acc.user, acc.pass);
       const mailOptions = {
+        ...mailBase,
         from: `Allstate Billing <${acc.user}>`,
-        to,
-        subject,
-        text: body,
-        attachments: [
-          {
-            filename: "invoice.pdf",
-            content: Buffer.from(pdf, "base64"),
-            contentType: "application/pdf",
-          },
-        ],
       };
 
-      // ✅ Attempt send
-      const info = await transporter.sendMail(mailOptions);
-      console.log(
-        `[Server] Email sent via ${acc.label}: ${acc.user} -> ${to}, Message ID: ${info.messageId}`
-      );
+      // First attempt
+      try {
+        const info = await transporter.sendMail(mailOptions);
+        console.log(
+          JSON.stringify({
+            level: "info",
+            event: "sent",
+            reqId,
+            sender: acc.user,
+            to,
+            messageId: info.messageId,
+          })
+        );
+        return res.status(200).json({
+          message: "Email sent",
+          recipient: to,
+          sender: acc.user,
+          id: info.messageId,
+          reqId,
+        });
+      } catch (err1) {
+        const c1 = classify(err1);
+        console.error(
+          JSON.stringify({
+            level: "error",
+            event: "send_fail_first",
+            reqId,
+            account: acc.label,
+            sender: acc.user,
+            to,
+            reason: c1.reason,
+            code: err1?.responseCode,
+          })
+        );
+        lastError = err1;
 
-      return res.status(200).json({
-        message: "Email sent",
-        recipient: to,
-        sender: acc.user,
-        id: info.messageId,
-      });
-    } catch (err) {
-      lastError = err;
+        if (/Daily user sending limit exceeded/i.test(err1?.message || "")) {
+          // try next account immediately
+          continue;
+        }
+        if (c1.retryable) {
+          // backoff and retry once on same account
+          await sleep(800);
+          try {
+            const info2 = await transporter.sendMail(mailOptions);
+            console.log(
+              JSON.stringify({
+                level: "info",
+                event: "sent_after_retry",
+                reqId,
+                sender: acc.user,
+                to,
+                messageId: info2.messageId,
+              })
+            );
+            return res.status(200).json({
+              message: "Email sent",
+              recipient: to,
+              sender: acc.user,
+              id: info2.messageId,
+              reqId,
+            });
+          } catch (err2) {
+            const c2 = classify(err2);
+            console.error(
+              JSON.stringify({
+                level: "error",
+                event: "send_fail_retry",
+                reqId,
+                account: acc.label,
+                sender: acc.user,
+                to,
+                reason: c2.reason,
+                code: err2?.responseCode,
+              })
+            );
+            lastError = err2;
+            // On retryable failure after retry, move to next account
+            continue;
+          }
+        }
+        // Non-retryable error -> stop and return 502
+        return res
+          .status(502)
+          .json({ error: "Send failed", detail: c1.reason, reqId });
+      }
+    } catch (outer) {
+      // Transporter creation or unexpected error
+      lastError = outer;
       console.error(
-        `[Server] Send failed via ${acc.label}:`,
-        err?.message || err
+        JSON.stringify({
+          level: "error",
+          event: "transporter_error",
+          reqId,
+          account: acc.label,
+          sender: acc.user,
+          to,
+          reason: outer?.message || "unknown",
+        })
       );
-
-      // If daily limit exceeded, try next account
-      if (/Daily user sending limit exceeded/i.test(err?.message || ""))
-        continue;
-
-      break; // other errors → stop
+      // try next account
+      continue;
     }
   }
 
   return res.status(500).json({
-    error: "Failed to send email",
+    error: "Failed to send email on all accounts",
     detail: lastError?.message || "Unknown error",
+    reqId,
   });
 }
