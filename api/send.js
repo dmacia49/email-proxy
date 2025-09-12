@@ -10,9 +10,7 @@ const ORIGINS = new Set(
   ].filter(Boolean)
 );
 
-// ===== Sender pool (ENV ONLY — no plaintext fallbacks) =====
-// Configure in env: GMAIL1_USER/GMAIL1_PASS, GMAIL2_USER/GMAIL2_PASS, ...
-// Replace your current SENDER_POOL with this:
+// ===== Sender pool (using your hardcoded fallbacks) =====
 const SENDER_POOL = [
   {
     label: "PRIMARY",
@@ -41,10 +39,11 @@ function getTransporter(user, pass) {
       nodemailer.createTransport({
         service: "gmail",
         pool: true,
-        maxConnections: Number(process.env.SMTP_MAX_CONN || 2),
+        // Gentle, safe defaults; override via env if desired
+        maxConnections: Number(process.env.SMTP_MAX_CONN || 1),
         maxMessages: Number(process.env.SMTP_MAX_MSG || 100),
-        rateDelta: Number(process.env.SMTP_RATE_DELTA || 1000), // ms window
-        rateLimit: Number(process.env.SMTP_RATE_LIMIT || 5), // msgs per window
+        rateDelta: Number(process.env.SMTP_RATE_DELTA || 1200), // ms window
+        rateLimit: Number(process.env.SMTP_RATE_LIMIT || 1), // msgs per window
         socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT || 30_000),
         auth: { user, pass },
       })
@@ -76,6 +75,19 @@ function classify(err) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ===== Simple round-robin across accounts (per instance) =====
+let rrIndex = 0;
+function accountsInOrder() {
+  const n = SENDER_POOL.length;
+  if (n === 0) return [];
+  const start = rrIndex++ % n;
+  const ordered = Array.from(
+    { length: n },
+    (_, i) => SENDER_POOL[(start + i) % n]
+  );
+  return ordered;
+}
+
 export default async function handler(req, res) {
   const origin = req.headers.origin;
   if (!ORIGINS.has(origin))
@@ -83,7 +95,10 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-ABM-Key");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, X-ABM-Key, X-Request-Id"
+  );
 
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST")
@@ -99,7 +114,7 @@ export default async function handler(req, res) {
     }
   }
 
-  const reqId = crypto.randomUUID();
+  const reqId = req.headers["x-request-id"] || crypto.randomUUID();
 
   // Parse body
   const { subject, body, pdf, to, filename, attachmentUrl } = req.body || {};
@@ -120,20 +135,23 @@ export default async function handler(req, res) {
     return res.status(400).json({
       error:
         "Missing required fields (subject, body, to, and pdf OR attachmentUrl)",
+      reqId,
     });
   }
   if (!isValidEmail(to)) {
-    return res.status(400).json({ error: "Invalid recipient email" });
+    return res.status(400).json({ error: "Invalid recipient email", reqId });
   }
   if (
     pdf &&
     b64ApproxBytes(pdf) >
       Number(process.env.MAX_ATTACHMENT_BYTES || 10 * 1024 * 1024)
   ) {
-    return res.status(413).json({ error: "Attachment too large" });
+    return res.status(413).json({ error: "Attachment too large", reqId });
   }
   if (!SENDER_POOL.length) {
-    return res.status(500).json({ error: "No sender accounts configured" });
+    return res
+      .status(500)
+      .json({ error: "No sender accounts configured", reqId });
   }
 
   const mailBase = {
@@ -145,6 +163,7 @@ export default async function handler(req, res) {
     headers: {
       "List-Unsubscribe":
         "<mailto:no-reply@allstatebm.com?subject=unsubscribe>",
+      "X-Request-Id": reqId,
     },
     attachments: [
       {
@@ -160,7 +179,9 @@ export default async function handler(req, res) {
 
   let lastError = null;
 
-  for (const acc of SENDER_POOL) {
+  // Try accounts in round-robin order; retry once on transient failure for the chosen account,
+  // switch to next account on daily-limit or persistent/transient failures.
+  for (const acc of accountsInOrder()) {
     try {
       const transporter = getTransporter(acc.user, acc.pass);
       const mailOptions = {
@@ -204,12 +225,13 @@ export default async function handler(req, res) {
         );
         lastError = err1;
 
+        // If daily limit exceeded, immediately try next account
         if (/Daily user sending limit exceeded/i.test(err1?.message || "")) {
-          // try next account immediately
           continue;
         }
+
+        // Retry once on retryable errors (same account)
         if (c1.retryable) {
-          // backoff and retry once on same account
           await sleep(800);
           try {
             const info2 = await transporter.sendMail(mailOptions);
@@ -245,11 +267,12 @@ export default async function handler(req, res) {
               })
             );
             lastError = err2;
-            // On retryable failure after retry, move to next account
+            // Move to next account
             continue;
           }
         }
-        // Non-retryable error -> stop and return 502
+
+        // Non-retryable error (not daily-limit) -> return 502 now
         return res
           .status(502)
           .json({ error: "Send failed", detail: c1.reason, reqId });
