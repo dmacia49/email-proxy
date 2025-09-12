@@ -12,21 +12,22 @@ const ORIGINS = new Set(
 
 // ===== Sender pool (ENV ONLY — no plaintext fallbacks) =====
 // Configure in env: GMAIL1_USER/GMAIL1_PASS, GMAIL2_USER/GMAIL2_PASS, ...
+// Replace your current SENDER_POOL with this:
 const SENDER_POOL = [
   {
     label: "PRIMARY",
-    user: process.env.GMAIL1_USER,
-    pass: process.env.GMAIL1_PASS,
+    user: "allstatebm2@gmail.com",
+    pass: process.env.GMAIL2_PASS || "akyswfsarantchxt",
   },
   {
     label: "BACKUP_A",
-    user: process.env.GMAIL2_USER,
-    pass: process.env.GMAIL2_PASS,
+    user: "allstatebm@gmail.com",
+    pass: process.env.GMAIL1_PASS || "bayuwsrqoiofgrbr",
   },
   {
     label: "BACKUP_B",
-    user: process.env.GMAIL3_USER,
-    pass: process.env.GMAIL3_PASS,
+    user: "allstatebm3@gmail.com",
+    pass: process.env.GMAIL3_PASS || "iexvbzmwueoxdllr",
   },
 ].filter((a) => a.user && a.pass);
 
@@ -116,12 +117,10 @@ export default async function handler(req, res) {
 
   // Validate
   if (!subject || !body || !to || (!pdf && !attachmentUrl)) {
-    return res
-      .status(400)
-      .json({
-        error:
-          "Missing required fields (subject, body, to, and pdf OR attachmentUrl)",
-      });
+    return res.status(400).json({
+      error:
+        "Missing required fields (subject, body, to, and pdf OR attachmentUrl)",
+    });
   }
   if (!isValidEmail(to)) {
     return res.status(400).json({ error: "Invalid recipient email" });
