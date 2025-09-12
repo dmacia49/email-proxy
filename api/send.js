@@ -10,22 +10,23 @@ const ORIGINS = new Set(
   ].filter(Boolean)
 );
 
-// ===== Sender pool (using your hardcoded fallbacks) =====
+// ===== Sender pool (ENV ONLY — no plaintext fallbacks) =====
+// Configure in env: GMAIL1_USER/GMAIL1_PASS, GMAIL2_USER/GMAIL2_PASS, ...
 const SENDER_POOL = [
   {
     label: "PRIMARY",
-    user: "allstatebm2@gmail.com",
-    pass: process.env.GMAIL2_PASS || "akyswfsarantchxt",
+    user: process.env.GMAIL1_USER,
+    pass: process.env.GMAIL1_PASS,
   },
   {
     label: "BACKUP_A",
-    user: "allstatebm@gmail.com",
-    pass: process.env.GMAIL1_PASS || "bayuwsrqoiofgrbr",
+    user: process.env.GMAIL2_USER,
+    pass: process.env.GMAIL2_PASS,
   },
   {
     label: "BACKUP_B",
-    user: "allstatebm3@gmail.com",
-    pass: process.env.GMAIL3_PASS || "iexvbzmwueoxdllr",
+    user: process.env.GMAIL3_USER,
+    pass: process.env.GMAIL3_PASS,
   },
 ].filter((a) => a.user && a.pass);
 
@@ -39,11 +40,10 @@ function getTransporter(user, pass) {
       nodemailer.createTransport({
         service: "gmail",
         pool: true,
-        // Safe defaults; adjust via env if needed
-        maxConnections: Number(process.env.SMTP_MAX_CONN || 1),
+        maxConnections: Number(process.env.SMTP_MAX_CONN || 2),
         maxMessages: Number(process.env.SMTP_MAX_MSG || 100),
-        rateDelta: Number(process.env.SMTP_RATE_DELTA || 1200), // ms window
-        rateLimit: Number(process.env.SMTP_RATE_LIMIT || 1), // msgs per window
+        rateDelta: Number(process.env.SMTP_RATE_DELTA || 1000), // ms window
+        rateLimit: Number(process.env.SMTP_RATE_LIMIT || 5), // msgs per window
         socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT || 30_000),
         auth: { user, pass },
       })
@@ -73,15 +73,7 @@ function classify(err) {
     return { retryable: true, reason: "Network timeout" };
   return { retryable: false, reason: msg || "Unknown error" };
 }
-
-// ===== Simple round-robin across accounts (per instance) =====
-let rrIndex = 0;
-function accountsInOrder() {
-  const n = SENDER_POOL.length;
-  if (n === 0) return [];
-  const start = rrIndex++ % n;
-  return Array.from({ length: n }, (_, i) => SENDER_POOL[(start + i) % n]);
-}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export default async function handler(req, res) {
   const origin = req.headers.origin;
@@ -90,10 +82,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, X-ABM-Key, X-Request-Id"
-  );
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-ABM-Key");
 
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST")
@@ -109,7 +98,7 @@ export default async function handler(req, res) {
     }
   }
 
-  const reqId = req.headers["x-request-id"] || crypto.randomUUID();
+  const reqId = crypto.randomUUID();
 
   // Parse body
   const { subject, body, pdf, to, filename, attachmentUrl } = req.body || {};
@@ -130,23 +119,20 @@ export default async function handler(req, res) {
     return res.status(400).json({
       error:
         "Missing required fields (subject, body, to, and pdf OR attachmentUrl)",
-      reqId,
     });
   }
   if (!isValidEmail(to)) {
-    return res.status(400).json({ error: "Invalid recipient email", reqId });
+    return res.status(400).json({ error: "Invalid recipient email" });
   }
   if (
     pdf &&
     b64ApproxBytes(pdf) >
       Number(process.env.MAX_ATTACHMENT_BYTES || 10 * 1024 * 1024)
   ) {
-    return res.status(413).json({ error: "Attachment too large", reqId });
+    return res.status(413).json({ error: "Attachment too large" });
   }
   if (!SENDER_POOL.length) {
-    return res
-      .status(500)
-      .json({ error: "No sender accounts configured", reqId });
+    return res.status(500).json({ error: "No sender accounts configured" });
   }
 
   const mailBase = {
@@ -158,7 +144,6 @@ export default async function handler(req, res) {
     headers: {
       "List-Unsubscribe":
         "<mailto:no-reply@allstatebm.com?subject=unsubscribe>",
-      "X-Request-Id": reqId,
     },
     attachments: [
       {
@@ -174,11 +159,7 @@ export default async function handler(req, res) {
 
   let lastError = null;
 
-  // Fast-path: one attempt per account, no retry on the same account.
-  // - If "daily limit exceeded" -> immediately try next account.
-  // - If "recipient rejected" (non-recoverable) -> return 502 immediately.
-  // - For other errors (temporary/network/unknown) -> try next account without delay.
-  for (const acc of accountsInOrder()) {
+  for (const acc of SENDER_POOL) {
     try {
       const transporter = getTransporter(acc.user, acc.pass);
       const mailOptions = {
@@ -186,6 +167,7 @@ export default async function handler(req, res) {
         from: `Allstate Billing <${acc.user}>`,
       };
 
+      // First attempt
       try {
         const info = await transporter.sendMail(mailOptions);
         console.log(
@@ -210,7 +192,7 @@ export default async function handler(req, res) {
         console.error(
           JSON.stringify({
             level: "error",
-            event: "send_fail",
+            event: "send_fail_first",
             reqId,
             account: acc.label,
             sender: acc.user,
@@ -221,22 +203,58 @@ export default async function handler(req, res) {
         );
         lastError = err1;
 
-        // Non-recoverable for this message: stop immediately
-        if (c1.reason === "Recipient rejected") {
-          return res
-            .status(502)
-            .json({ error: "Send failed", detail: c1.reason, reqId });
-        }
-
-        // Daily cap on this account -> try next account
         if (/Daily user sending limit exceeded/i.test(err1?.message || "")) {
+          // try next account immediately
           continue;
         }
-
-        // Temporary/network/unknown -> fastest path: try next account (no retry on same account)
-        continue;
+        if (c1.retryable) {
+          // backoff and retry once on same account
+          await sleep(800);
+          try {
+            const info2 = await transporter.sendMail(mailOptions);
+            console.log(
+              JSON.stringify({
+                level: "info",
+                event: "sent_after_retry",
+                reqId,
+                sender: acc.user,
+                to,
+                messageId: info2.messageId,
+              })
+            );
+            return res.status(200).json({
+              message: "Email sent",
+              recipient: to,
+              sender: acc.user,
+              id: info2.messageId,
+              reqId,
+            });
+          } catch (err2) {
+            const c2 = classify(err2);
+            console.error(
+              JSON.stringify({
+                level: "error",
+                event: "send_fail_retry",
+                reqId,
+                account: acc.label,
+                sender: acc.user,
+                to,
+                reason: c2.reason,
+                code: err2?.responseCode,
+              })
+            );
+            lastError = err2;
+            // On retryable failure after retry, move to next account
+            continue;
+          }
+        }
+        // Non-retryable error -> stop and return 502
+        return res
+          .status(502)
+          .json({ error: "Send failed", detail: c1.reason, reqId });
       }
     } catch (outer) {
+      // Transporter creation or unexpected error
       lastError = outer;
       console.error(
         JSON.stringify({
