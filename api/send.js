@@ -15,18 +15,18 @@ const ORIGINS = new Set(
 const SENDER_POOL = [
   {
     label: "PRIMARY",
-    user: process.env.GMAIL1_USER,
-    pass: process.env.GMAIL1_PASS,
+    user: process.env.GMAIL1_USER || "allstatebm@gmail.com",
+    pass: process.env.GMAIL1_PASS || "akyswfsarantchxt",
   },
   {
     label: "BACKUP_A",
-    user: process.env.GMAIL2_USER,
-    pass: process.env.GMAIL2_PASS,
+    user: process.env.GMAIL2_USER || "allstatebm2@gmail.com",
+    pass: process.env.GMAIL2_PASS || "bayuwsrqoiofgrbr",
   },
   {
     label: "BACKUP_B",
-    user: process.env.GMAIL3_USER,
-    pass: process.env.GMAIL3_PASS,
+    user: process.env.GMAIL3_USER || "allstatebm3@gmail.com",
+    pass: process.env.GMAIL3_PASS || "iexvbzmwueoxdllr",
   },
 ].filter((a) => a.user && a.pass);
 
